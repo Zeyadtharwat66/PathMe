@@ -36,6 +36,7 @@ build/
 /.env
 /.env.*
 !/.env.example
-
+/database/*.mv.db
+/database/*.trace.db
 # Uploaded files
 /uploads/
