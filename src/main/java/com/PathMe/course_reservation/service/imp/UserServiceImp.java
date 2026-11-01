@@ -1,7 +1,6 @@
 package com.PathMe.course_reservation.service.imp;
 
 
-import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
@@ -9,6 +8,7 @@ import java.util.UUID;
 
 import com.PathMe.course_reservation.annotations.validator.PhoneNumberValidator;
 import com.PathMe.course_reservation.service.EnrollmentService;
+import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -41,12 +41,13 @@ import com.PathMe.course_reservation.repository.EnrollmentRepository;
 import com.PathMe.course_reservation.repository.UserRepo;
 import com.PathMe.course_reservation.service.JWTTokenService;
 import com.PathMe.course_reservation.service.UserService;
-
+import org.springframework.beans.factory.annotation.Value;
+import java.time.Duration;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.transaction.Transactional;
-import lombok.AllArgsConstructor;
+
 @Service
-@AllArgsConstructor
+@RequiredArgsConstructor
 public class UserServiceImp implements UserService {
         private final AuthenticationManager authenticationManager;
         private final UserRepo userRepo;
@@ -55,7 +56,11 @@ public class UserServiceImp implements UserService {
         private final EnrollmentRepository enrollmentRepo;
         private final CourseRepository courseRepo;
         private final PhoneNumberValidator phoneNumberValidator;
+        @Value("${app.cookie.secure:false}")
+        private boolean cookieSecure;
 
+        @Value("${app.jwt.exp-minutes:60}")
+        private long jwtExpirationMinutes;
         @Override
         public ResponseEntity<?> login(LoginDTO loginDTO) {
                 Authentication authentication = authenticationManager.authenticate(
@@ -66,12 +71,12 @@ public class UserServiceImp implements UserService {
                 UserEntity user = userRepo.findByUsername(loginDTO.username())
                                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED));
                 ResponseCookie jwtCookie = ResponseCookie.from("jwt", token)
-                                .httpOnly(true)
-                                .secure(false) // Development over HTTP only
-                                .sameSite("Lax")
-                                .path("/")
-                                .maxAge(60 * 60) // 1 hour; match your JWT expiration
-                                .build();
+                        .httpOnly(true)
+                        .secure(cookieSecure)
+                        .sameSite("Lax")
+                        .path("/")
+                        .maxAge(Duration.ofMinutes(jwtExpirationMinutes))
+                        .build();
                 Map<String, Object> userData = new HashMap<>();
                 userData.put("id", user.getId());
                 userData.put("username", user.getUsername());
@@ -128,12 +133,12 @@ public class UserServiceImp implements UserService {
                                                 registerDTO.password()));
                 String token = jwtTokenService.generateJWTToken(authentication);
                 ResponseCookie jwtCookie = ResponseCookie.from("jwt", token)
-                                .httpOnly(true)
-                                .secure(false) // Development over HTTP only
-                                .sameSite("Lax")
-                                .path("/")
-                                .maxAge(60 * 60) // Match your JWT expiration
-                                .build();
+                        .httpOnly(true)
+                        .secure(cookieSecure)
+                        .sameSite("Lax")
+                        .path("/")
+                        .maxAge(Duration.ofMinutes(jwtExpirationMinutes))
+                        .build();
                 Map<String, Object> userData = new HashMap<>();
                 userData.put("id", user.getId());
                 userData.put("username", user.getUsername());
@@ -150,12 +155,12 @@ public class UserServiceImp implements UserService {
         @Override
         public ResponseEntity<?> logout(HttpServletResponse response) {
                 ResponseCookie cookie = ResponseCookie.from("jwt", "")
-                                .httpOnly(true)
-                                .secure(false) // Development على localhost بـ HTTP فقط
-                                .path("/")
-                                .maxAge(0)
-                                .sameSite("Lax")
-                                .build();
+                        .httpOnly(true)
+                        .secure(cookieSecure)
+                        .sameSite("Lax")
+                        .path("/")
+                        .maxAge(Duration.ZERO)
+                        .build();
                 response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
                 return ResponseEntity.ok(
                                 Map.of("message", "Logged out successfully"));
@@ -181,62 +186,80 @@ public class UserServiceImp implements UserService {
 
         @Transactional
         public ResponseEntity<?> updateProfile(Authentication auth, UpdateProfileRequest req) {
-                String principalName = auth.getName();
-                UserEntity u = currentUser(principalName);
 
+                String oldUsername = auth.getName();
+                UserEntity u = currentUser(oldUsername);
+
+                // Update username
                 if (req.username() != null) {
                         String username = req.username().trim();
+
                         if (!username.equals(u.getUsername())) {
-                                if (userRepo.existsByUsernameIgnoreCaseAndIdNot(username, u.getId()))
-                                        throw new ResponseStatusException(HttpStatus.CONFLICT,
-                                                        "Username is already taken");
+                                if (userRepo.existsByUsernameIgnoreCaseAndIdNot(username, u.getId())) {
+                                        throw new ResponseStatusException(
+                                                HttpStatus.CONFLICT,
+                                                "Username is already taken"
+                                        );
+                                }
                                 u.setUsername(username);
                         }
                 }
 
+                // Update email
                 if (req.email() != null) {
                         String email = req.email().trim().toLowerCase();
+
                         if (!email.equalsIgnoreCase(u.getEmail())) {
-                                if (userRepo.existsByEmailIgnoreCaseAndIdNot(email, u.getId()))
-                                        throw new ResponseStatusException(HttpStatus.CONFLICT,
-                                                        "Email is already registered");
+                                if (userRepo.existsByEmailIgnoreCaseAndIdNot(email, u.getId())) {
+                                        throw new ResponseStatusException(
+                                                HttpStatus.CONFLICT,
+                                                "Email is already registered"
+                                        );
+                                }
                                 u.setEmail(email);
                         }
                 }
+
+                // Update remaining fields BEFORE returning
+                if (req.phoneNumber() != null) {
+                        u.setPhoneNumber(req.phoneNumber());
+                }
+
+                if (req.gender() != null) {
+                        u.setGender(req.gender());
+                }
+
+                if (req.age() != null) {
+                        u.setAge(req.age());
+                }
+
+                // Save changes
+                userRepo.save(u);
+
+                // Issue a new JWT only if the username changed
                 ResponseEntity.BodyBuilder response = ResponseEntity.ok();
 
-                // لو الـ username اتغير، اصدر JWT جديد
-                if (!auth.getName().equals(u.getUsername())) {
+                if (!oldUsername.equals(u.getUsername())) {
                         Authentication newAuth = new UsernamePasswordAuthenticationToken(
-                                        u.getUsername(),
-                                        null,
-                                        auth.getAuthorities());
-                        String newToken = jwtTokenService.generateJWTToken(newAuth);
-                        ResponseCookie cookie = ResponseCookie.from("jwt", newToken)
-                                        .httpOnly(true)
-                                        .secure(false) // في Production مع HTTPS
-                                        .sameSite("Lax")
-                                        .path("/")
-                                        .maxAge(Duration.ofHours(24))
-                                        .build();
-                        return ResponseEntity.ok()
-                                        .header(HttpHeaders.SET_COOKIE, cookie.toString())
-                                        .body(Map.of("user", u));
-                }
-                if (req.phoneNumber() != null)
-                        u.setPhoneNumber(req.phoneNumber());
-                if (req.gender() != null)
-                        u.setGender(req.gender());
-                if (req.age() != null)
-                        u.setAge(req.age());
+                                u.getUsername(),
+                                null,
+                                auth.getAuthorities()
+                        );
 
-                try {
-                        return ResponseEntity.ok()
-                                        .body(Map.of("user", u));
-                } catch (DataIntegrityViolationException ex) {
-                        // حماية من race condition: يوزرين بيحاولوا ياخدوا نفس الإيميل في نفس اللحظة
-                        throw new ResponseStatusException(HttpStatus.CONFLICT, "Username or email is already in use");
+                        String newToken = jwtTokenService.generateJWTToken(newAuth);
+
+                        ResponseCookie cookie = ResponseCookie.from("jwt", newToken)
+                                .httpOnly(true)
+                                .secure(cookieSecure)
+                                .sameSite("Lax")
+                                .path("/")
+                                .maxAge(Duration.ofMinutes(jwtExpirationMinutes))
+                                .build();
+
+                        response.header(HttpHeaders.SET_COOKIE, cookie.toString());
                 }
+
+                return response.body(Map.of("user", toProfile(u)));
         }
 
         @Transactional

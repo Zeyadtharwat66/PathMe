@@ -17,7 +17,7 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.oauth2.core.oidc.user.OidcUser;
 import org.springframework.security.web.authentication.AuthenticationSuccessHandler;
 import org.springframework.stereotype.Component;
-
+import org.springframework.beans.factory.annotation.Value;
 import java.io.IOException;
 import java.time.Duration;
 
@@ -28,7 +28,14 @@ public class OAuth2LoginSuccessHandler
 
     private final CustomStudentDetailsService userDetailsService;
     private final JWTTokenService jwtTokenService;
+    @Value("${app.frontend.url}")
+    private String frontendUrl;
 
+    @Value("${app.cookie.secure:false}")
+    private boolean cookieSecure;
+
+    @Value("${app.jwt.exp-minutes:60}")
+    private long jwtExpirationMinutes;
     @Override
     public void onAuthenticationSuccess(
             HttpServletRequest request,
@@ -54,10 +61,10 @@ public class OAuth2LoginSuccessHandler
 
         ResponseCookie cookie = ResponseCookie.from("jwt", token)
                 .httpOnly(true)
-                .secure(request.isSecure())
+                .secure(cookieSecure)
                 .sameSite("Lax")
                 .path("/")
-                .maxAge(Duration.ofHours(1))
+                .maxAge(Duration.ofMinutes(jwtExpirationMinutes))
                 .build();
 
         response.addHeader(
@@ -65,6 +72,6 @@ public class OAuth2LoginSuccessHandler
                 cookie.toString()
         );
 
-        response.sendRedirect("http://192.168.1.46:3000");
+        response.sendRedirect(frontendUrl);
     }
 }
