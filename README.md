@@ -67,7 +67,7 @@ As the freelance Backend Developer, I was responsible for:
 
 ## Project Links
 
-- **Live Website:** [PathMe](pathme.tech)
+- **Live Website:** [PathMe](https://pathme.tech)
 - **Backend Repository:** [GitHub Repository](https://github.com/Zeyadtharwat66/PathMe.git)
 
 ---
